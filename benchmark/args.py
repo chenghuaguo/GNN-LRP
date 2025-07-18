@@ -95,6 +95,7 @@ class DataArgs(GeneralArgs):
     num_targets: int = 0                        # Default: invalid num
     dim_hidden: int = 300                   # node hidden feature's dimension
     dim_ffn: int = 300                      # final linear layer dim
+    dropout: float = 0.5                    # dropout probability
 
 
 common_args = GeneralArgs().parse_args(known_only=True)
