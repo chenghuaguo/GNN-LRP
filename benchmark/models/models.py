@@ -84,10 +84,10 @@ class GCN_3l(GNNBasic):
 
         self.ffn = nn.Sequential(*(
                 [nn.Linear(data_args.dim_hidden, data_args.dim_hidden)] +
-                [nn.ReLU(), nn.Dropout(), nn.Linear(data_args.dim_hidden, data_args.num_classes)]
+                [nn.ReLU(), nn.Dropout(p=data_args.dropout), nn.Linear(data_args.dim_hidden, data_args.num_classes)]
         ))
 
-        self.dropout = nn.Dropout()
+        self.dropout = nn.Dropout(p=data_args.dropout)
 
     def forward(self, *args, **kwargs) -> torch.Tensor:
         """
@@ -97,9 +97,9 @@ class GCN_3l(GNNBasic):
         x, edge_index, batch = self.arguments_read(*args, **kwargs)
 
 
-        post_conv = self.relu1(self.conv1(x, edge_index))
+        post_conv = self.dropout(self.relu1(self.conv1(x, edge_index)))
         for conv, relu in zip(self.convs, self.relus):
-            post_conv = relu(conv(post_conv, edge_index))
+            post_conv = self.dropout(relu(conv(post_conv, edge_index)))
 
 
         out_readout = self.readout(post_conv, batch)
@@ -137,7 +137,7 @@ class GCN_2l(GNNBasic):
                 [nn.Linear(data_args.dim_hidden, data_args.num_classes)]
         ))
 
-        self.dropout = nn.Dropout()
+        self.dropout = nn.Dropout(p=data_args.dropout)
 
     def forward(self, *args, **kwargs) -> torch.Tensor:
         """
@@ -146,9 +146,9 @@ class GCN_2l(GNNBasic):
         """
         x, edge_index, batch = self.arguments_read(*args, **kwargs)
 
-        post_conv = self.relu1(self.conv1(x, edge_index))
+        post_conv = self.dropout(self.relu1(self.conv1(x, edge_index)))
         for conv, relu in zip(self.convs, self.relus):
-            post_conv = relu(conv(post_conv, edge_index))
+            post_conv = self.dropout(relu(conv(post_conv, edge_index)))
 
         out_readout = self.readout(post_conv, batch)
 
@@ -188,10 +188,10 @@ class GIN_3l(GNNBasic):
 
         self.ffn = nn.Sequential(*(
                 [nn.Linear(data_args.dim_hidden, data_args.dim_hidden)] +
-                [nn.ReLU(), nn.Dropout(), nn.Linear(data_args.dim_hidden, data_args.num_classes)]
+                [nn.ReLU(), nn.Dropout(p=data_args.dropout), nn.Linear(data_args.dim_hidden, data_args.num_classes)]
         ))
 
-        self.dropout = nn.Dropout()
+        self.dropout = nn.Dropout(p=data_args.dropout)
 
     def forward(self, *args, **kwargs) -> torch.Tensor:
         """
@@ -201,9 +201,9 @@ class GIN_3l(GNNBasic):
         x, edge_index, batch = self.arguments_read(*args, **kwargs)
 
 
-        post_conv = self.conv1(x, edge_index)
+        post_conv = self.dropout(self.conv1(x, edge_index))
         for conv in self.convs:
-            post_conv = conv(post_conv, edge_index)
+            post_conv = self.dropout(conv(post_conv, edge_index))
 
 
         out_readout = self.readout(post_conv, batch)
@@ -242,10 +242,10 @@ class GIN_2l(GNNBasic):
 
         self.ffn = nn.Sequential(*(
                 [nn.Linear(data_args.dim_hidden, data_args.dim_hidden)] +
-                [nn.ReLU(), nn.Dropout(), nn.Linear(data_args.dim_hidden, data_args.num_classes)]
+                [nn.ReLU(), nn.Dropout(p=data_args.dropout), nn.Linear(data_args.dim_hidden, data_args.num_classes)]
         ))
 
-        self.dropout = nn.Dropout()
+        self.dropout = nn.Dropout(p=data_args.dropout)
 
     def forward(self, *args, **kwargs) -> torch.Tensor:
         """
@@ -255,9 +255,9 @@ class GIN_2l(GNNBasic):
         x, edge_index, batch = self.arguments_read(*args, **kwargs)
 
 
-        post_conv = self.conv1(x, edge_index)
+        post_conv = self.dropout(self.conv1(x, edge_index))
         for conv in self.convs:
-            post_conv = conv(post_conv, edge_index)
+            post_conv = self.dropout(conv(post_conv, edge_index))
 
 
         out_readout = self.readout(post_conv, batch)

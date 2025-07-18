@@ -128,3 +128,23 @@ def subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
         edge_index = node_idx[edge_index]
 
     return subset, edge_index, inv, edge_mask
+
+
+def mc_dropout_uncertainty(model, mc_runs=10, **kwargs):
+    """Compute predictive, aleatoric and epistemic uncertainty via MC Dropout."""
+    eps = 1e-12
+    model.train()
+    probs = []
+    entropies = []
+    for _ in range(mc_runs):
+        out = model(**kwargs)
+        p = torch.softmax(out, dim=1)
+        probs.append(p)
+        entropies.append(-(p * (p + eps).log()).sum(dim=1))
+    probs = torch.stack(probs, dim=0)
+    mean_p = probs.mean(dim=0)
+    tu = -(mean_p * (mean_p + eps).log()).sum(dim=1)
+    au = torch.stack(entropies, dim=0).mean(dim=0)
+    eu = tu - au
+    model.eval()
+    return tu, au, eu
