@@ -22,7 +22,7 @@ from torch_geometric.nn import MessagePassing
 from torch_geometric.utils.loop import add_self_loops, remove_self_loops
 from torch_geometric.data import Data, Batch
 from torch_geometric.utils import to_networkx
-from benchmark.models.utils import subgraph, normalize
+from benchmark.models.utils import subgraph, normalize, mc_dropout_uncertainty
 from torch.nn.functional import binary_cross_entropy as bceloss
 from typing_extensions import Literal
 from benchmark.kernel.utils import Metric
@@ -469,28 +469,26 @@ class ExplainerBase(nn.Module):
         for ex_label, edge_mask in enumerate(edge_masks):
 
             self.edge_mask.data = float('inf') * torch.ones(edge_mask.size(), device=data_args.device)
-            ori_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            ori_tu, ori_au, ori_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs', 10), x=x, edge_index=edge_index, **kwargs)
 
             self.edge_mask.data = edge_mask
-            masked_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            masked_tu, masked_au, masked_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs', 10), x=x, edge_index=edge_index, **kwargs)
 
             # mask out important elements for fidelity calculation
             self.edge_mask.data = - edge_mask  # keep Parameter's id
-            maskout_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            maskout_tu, maskout_au, maskout_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs', 10), x=x, edge_index=edge_index, **kwargs)
 
             # zero_mask
             self.edge_mask.data = - float('inf') * torch.ones(edge_mask.size(), device=data_args.device)
-            zero_mask_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            zero_tu, zero_au, zero_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs', 10), x=x, edge_index=edge_index, **kwargs)
 
-            related_preds.append({'zero': zero_mask_pred[node_idx],
-                                  'masked': masked_pred[node_idx],
-                                  'maskout': maskout_pred[node_idx],
-                                  'origin': ori_pred[node_idx]})
+            related_preds.append({'zero': zero_tu[node_idx].item(),
+                                  'masked': masked_tu[node_idx].item(),
+                                  'maskout': maskout_tu[node_idx].item(),
+                                  'origin': ori_tu[node_idx].item()})
 
             # Adding proper activation function to the models' outputs.
-            if 'cs' in Metric.cur_task:
-                related_preds[ex_label] = {key: pred.softmax(0)[ex_label].item()
-                                        for key, pred in related_preds[ex_label].items()}
+            # TU is scalar already
 
         return related_preds
 
@@ -601,35 +599,33 @@ class WalkBase(ExplainerBase):
             for edge_mask in self.edge_mask:
                 edge_mask.data = float('inf') * torch.ones(mask.size(), device=data_args.device)
             graph = self.type_conversion(x, edge_index, edge_attr)
-            ori_pred = self.model(graph, cuda=True)
+            ori_tu, ori_au, ori_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs',10), batch=graph, cuda=True)
 
             for edge_mask in self.edge_mask:
                 edge_mask.data = mask
             graph = self.type_conversion(x, edge_index, edge_attr)
-            masked_pred = self.model(graph, cuda=True)
+            masked_tu, masked_au, masked_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs',10), batch=graph, cuda=True)
 
             # mask out important elements for fidelity calculation
             for edge_mask in self.edge_mask:
                 edge_mask.data = - mask
             graph = self.type_conversion(x, edge_index, edge_attr)
-            maskout_pred = self.model(graph, cuda=True)
+            maskout_tu, maskout_au, maskout_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs',10), batch=graph, cuda=True)
 
             # zero_mask
             for edge_mask in self.edge_mask:
                 edge_mask.data = - float('inf') * torch.ones(mask.size(), device=data_args.device)
             graph = self.type_conversion(x, edge_index, edge_attr)
-            zero_mask_pred = self.model(graph, cuda=True)
+            zero_tu, zero_au, zero_eu = mc_dropout_uncertainty(self.model, mc_runs=kwargs.get('mc_runs',10), batch=graph, cuda=True)
 
             # Store related predictions for further evaluation.
-            related_preds.append({'zero': zero_mask_pred[node_idx],
-                                  'masked': masked_pred[node_idx],
-                                  'maskout': maskout_pred[node_idx],
-                                  'origin': ori_pred[node_idx]})
+            related_preds.append({'zero': zero_tu[node_idx].item(),
+                                  'masked': masked_tu[node_idx].item(),
+                                  'maskout': maskout_tu[node_idx].item(),
+                                  'origin': ori_tu[node_idx].item()})
 
             # Adding proper activation function to the models' outputs.
-            if 'cs' in Metric.cur_task:
-                related_preds[label] = {key: pred.softmax(0)[label].item()
-                                        for key, pred in related_preds[label].items()}
+            # TU is scalar already
 
         return related_preds
 
@@ -706,9 +702,10 @@ class GNN_GI(WalkBase):
                 compute_walk_score(adjs[1:], new_r, allow_edges, [i] + walk_idx)
 
 
-        labels = tuple(i for i in range(data_args.num_classes))
-        walk_scores_tensor_list = [None for i in labels]
-        for label in labels:
+        labels = (0, 1, 2)
+        u_types = ('tu', 'au', 'eu')
+        walk_scores_tensor_list = [None for _ in labels]
+        for idx, u_type in enumerate(u_types):
 
             if self.explain_graph:
                 f = torch.unbind(fc_step['output'][0, label].unsqueeze(0))
@@ -780,7 +777,7 @@ class GNN_LRP(WalkBase):
             walk_indices_list = walk_indices_list[walk_indices_list_mask]
 
 
-        def compute_walk_score():
+        def compute_walk_score(u_type='tu'):
 
             # hyper-parameter gamma
             epsilon = 1e-30   # prevent from zero division
@@ -872,23 +869,42 @@ class GNN_LRP(WalkBase):
                     h = ht
 
                 if data_args.model_level == 'node':
-                    f = h[node_idx, label]
+                    logits = h[node_idx]
                 else:
-                    f = h[0, label]
+                    logits = h[0]
+                probs = []
+                entropies = []
+                for _ in range(kwargs.get('mc_runs', 10)):
+                    l = F.dropout(logits, p=data_args.dropout, training=True)
+                    p = l.softmax(0)
+                    probs.append(p)
+                    entropies.append(-(p * (p + epsilon).log()).sum())
+                probs = torch.stack(probs, dim=0)
+                mean_p = probs.mean(dim=0)
+                tu = -(mean_p * (mean_p + epsilon).log()).sum()
+                au = torch.stack(entropies).mean()
+                eu = tu - au
+                if u_type == 'tu':
+                    f = tu
+                elif u_type == 'au':
+                    f = au
+                else:
+                    f = eu
                 x_grads = torch.autograd.grad(outputs=f, inputs=x)[0]
                 I = walk_node_indices[0]
                 r = x_grads[I, :] @ x[I].T
                 walk_scores.append(r)
 
 
-        labels = tuple(i for i in range(data_args.num_classes))
-        walk_scores_tensor_list = [None for i in labels]
-        for label in labels:
+        labels = (0, 1, 2)
+        u_types = ('tu', 'au', 'eu')
+        walk_scores_tensor_list = [None for _ in labels]
+        for idx, u_type in enumerate(u_types):
 
             walk_scores = []
 
-            compute_walk_score()
-            walk_scores_tensor_list[label] = torch.stack(walk_scores, dim=0).view(-1, 1)
+            compute_walk_score(u_type)
+            walk_scores_tensor_list[idx] = torch.stack(walk_scores, dim=0).view(-1, 1)
 
         walks = {'ids': walk_indices_list, 'score': torch.cat(walk_scores_tensor_list, dim=1)}
 
